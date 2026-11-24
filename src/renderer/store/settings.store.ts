@@ -564,6 +564,7 @@ export const GeneralSettingsSchema = z.object({
     playlistTarget: PlaylistTargetSchema,
     primaryShade: z.number().min(0).max(9),
     qobuz: z.boolean(),
+    queueShowsPlayOrder: z.boolean(),
     resume: z.boolean(),
     shareExpiration: ShareExpirationSchema,
     showFavorites: z.boolean(),
@@ -1397,6 +1398,7 @@ const initialState: SettingsState = {
         playlistTarget: PlaylistTarget.TRACK,
         primaryShade: 6,
         qobuz: true,
+        queueShowsPlayOrder: false,
         resume: true,
         shareExpiration: {
             amount: 1,

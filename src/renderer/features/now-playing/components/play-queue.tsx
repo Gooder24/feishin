@@ -18,13 +18,11 @@ import { searchLibraryItems } from '/@/renderer/features/shared/utils';
 import { useDragDrop } from '/@/renderer/hooks/use-drag-drop';
 import { useHotkeys } from '/@/renderer/hooks/use-hotkeys';
 import {
-    isShuffleEnabled,
-    mapShuffledToQueueIndex,
+    getListedQueue,
     subscribeCurrentTrack,
     subscribePlayerQueue,
     useFollowCurrentSong,
     useListSettings,
-    usePlayerActions,
     usePlayerSong,
     usePlayerStore,
     useSettingsStore,
@@ -51,11 +49,11 @@ export const PlayQueue = forwardRef<ItemListHandle, QueueProps>(
         const { t } = useTranslation();
         const { table } = useListSettings(listKey) || {};
         const upNextQueueEnabled = useSettingsStore((state) => state.general.upNextQueue);
+        const queueShowsPlayOrder = useSettingsStore((state) => state.general.queueShowsPlayOrder);
 
         const isFetching = useIsPlayerFetching();
         const tableRef = useRef<ItemListHandle>(null);
         const mergedRef = useMergedRef(ref, tableRef);
-        const { getQueue } = usePlayerActions();
         const followCurrentSong = useFollowCurrentSong();
 
         const [debouncedSearchTerm] = useDebouncedValue(searchTerm, 200);
@@ -64,10 +62,15 @@ export const PlayQueue = forwardRef<ItemListHandle, QueueProps>(
         const [upNextIds, setUpNextIds] = useState<string[]>([]);
 
         useEffect(() => {
-            const setQueue = () => {
-                const queue = getQueue() || { groups: [], items: [] };
+            // The row of the current song: its position in the listed order
+            const getCurrentRow = () => {
+                const state = usePlayerStore.getState();
+                const currentId = state.getCurrentSong()?._uniqueId;
+                return getListedQueue(state).findIndex((item) => item._uniqueId === currentId);
+            };
 
-                setData(queue.items);
+            const setQueue = () => {
+                setData(getListedQueue(usePlayerStore.getState()));
 
                 setUpNextIds(usePlayerStore.getState().queue.priority);
             };
@@ -76,14 +79,15 @@ export const PlayQueue = forwardRef<ItemListHandle, QueueProps>(
                 setQueue();
             });
 
-            const unsubCurrentTrack = subscribeCurrentTrack((e) => {
-                if (followCurrentSong && e.index !== -1) {
+            const unsubCurrentTrack = subscribeCurrentTrack(() => {
+                const index = getCurrentRow();
+                if (followCurrentSong && index !== -1) {
                     // Defer a tick so the scroll applies to the updated queue/groups
                     // row model, not the pre-change layout. Scrolling immediately
                     // computes the offset against the stale rows, and the follow
                     // re-apply after re-render then jumps the viewport a second time.
                     setTimeout(() => {
-                        tableRef.current?.scrollToIndex(e.index, {
+                        tableRef.current?.scrollToIndex(index, {
                             align: 'center',
                             behavior: 'auto',
                         });
@@ -93,12 +97,7 @@ export const PlayQueue = forwardRef<ItemListHandle, QueueProps>(
 
             const handleAutoDJQueueAdded = () => {
                 if (followCurrentSong) {
-                    const state = usePlayerStore.getState();
-                    let index = state.player.index;
-
-                    if (isShuffleEnabled(state)) {
-                        index = mapShuffledToQueueIndex(index, state.queue.shuffled);
-                    }
+                    const index = getCurrentRow();
 
                     if (index !== -1) {
                         // Use setTimeout to ensure the DOM has updated with the new queue items
@@ -117,12 +116,7 @@ export const PlayQueue = forwardRef<ItemListHandle, QueueProps>(
             setQueue();
 
             if (followCurrentSong) {
-                const state = usePlayerStore.getState();
-                let index = state.player.index;
-
-                if (isShuffleEnabled(state)) {
-                    index = mapShuffledToQueueIndex(index, state.queue.shuffled);
-                }
+                const index = getCurrentRow();
 
                 if (index !== -1) {
                     setTimeout(() => {
@@ -139,7 +133,7 @@ export const PlayQueue = forwardRef<ItemListHandle, QueueProps>(
                 unsubCurrentTrack();
                 eventEmitter.off('AUTODJ_QUEUE_ADDED', handleAutoDJQueueAdded);
             };
-        }, [getQueue, tableRef, followCurrentSong]);
+        }, [tableRef, followCurrentSong, queueShowsPlayOrder]);
 
         const filteredData: QueueSong[] = useMemo(() => {
             if (debouncedSearchTerm) {

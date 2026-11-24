@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 
 import { getItemImageUrl } from '/@/renderer/components/item-image/item-image';
 import {
+    getListedQueue,
     subscribeCurrentTrack,
     subscribePlayerQueue,
     usePlayerStoreBase,
@@ -47,7 +48,7 @@ export const useRemoteQueuePush = () => {
         // Queue reorders/bulk-adds can fire rapidly — debounce like
         // remote-container.tsx already does for rating changes.
         const pushQueue = debounce(() => {
-            const { items } = usePlayerStoreBase.getState().getQueue();
+            const items = getListedQueue(usePlayerStoreBase.getState());
             remote?.updateQueue(currentUniqueIdRef.current, items.map(toRemoteQueueItem));
         }, 250);
 

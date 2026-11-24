@@ -342,6 +342,48 @@ function regenerateShuffledIndexesIfNeeded(state: {
 
 const isUpNextQueueEnabled = () => useSettingsStore.getState().general.upNextQueue;
 
+// True when the play queue lists the shuffled play order instead of the queue order.
+const isPlayOrderListed = (state: Pick<State, 'player' | 'queue'>) =>
+    isShuffleEnabled(state) && useSettingsStore.getState().general.queueShowsPlayOrder;
+
+export function getListedQueue(state: Pick<State, 'player' | 'queue'>): QueueSong[] {
+    return getListedOrder(state)
+        .map((id) => state.queue.songs[id])
+        .filter((song): song is QueueSong => song !== undefined);
+}
+
+// The order the play queue lists and reorders: the play order while shuffle is on and the
+// "Show shuffled order in queue" setting is enabled, else the queue order.
+function getListedOrder(state: Pick<State, 'player' | 'queue'>): string[] {
+    const { queue } = state;
+    return isPlayOrderListed(state) ? queue.shuffled.map((i) => queue.default[i]) : queue.default;
+}
+
+// Saves a reordered listed order. While the play order is listed, the queue order stays as it
+// is and the shuffled play order is rewritten to match.
+function setListedOrder(
+    state: Pick<State, 'player' | 'queue'>,
+    ids: string[],
+    currentId: string | undefined,
+): void {
+    if (!isPlayOrderListed(state)) {
+        recalculatePlayerIndex(state, ids);
+        state.queue.default = ids;
+        return;
+    }
+
+    const position = new Map(state.queue.default.map((id, i) => [id, i]));
+    for (const id of ids) {
+        if (!position.has(id)) {
+            position.set(id, state.queue.default.length);
+            state.queue.default.push(id);
+        }
+    }
+
+    state.queue.shuffled = ids.map((id) => position.get(id)!);
+    if (currentId !== undefined) state.player.index = Math.max(0, ids.indexOf(currentId));
+}
+
 const sameIds = <T>(a: T[], b: T[]) => a.length === b.length && a.every((v, i) => v === b[i]);
 
 // After songs are dragged or moved in the queue: Up Next songs moved out of the section become
@@ -360,15 +402,16 @@ function regroupUpNext(
     // Queue items can be pinned between the current song and the Up Next block (dropped on the
     // bottom of the first Queue section). While sitting there they keep the Up Next run going,
     // so a song dropped just above the section still joins it.
+    const order = getListedOrder(state);
     const lastKeptIndex = [...kept].reduce((last, id) => {
-        const index = state.queue.default.indexOf(id);
+        const index = order.indexOf(id);
         return index > last ? index : last;
     }, -1);
 
     const upNext: string[] = [];
     let previousIsUpNext = false;
 
-    state.queue.default.forEach((id, index) => {
+    order.forEach((id, index) => {
         if (id === currentId) {
             previousIsUpNext = true;
             return;
@@ -405,14 +448,15 @@ export const isUpNextQueueBoundaryDrop = (
     const upNext = state.queue.priority;
     if (upNext.length === 0) return false;
 
-    const upNextStart = state.queue.default.indexOf(upNext[0]);
-    const rowIndex = state.queue.default.indexOf(targetUniqueId);
+    const order = getListedOrder(state);
+    const upNextStart = order.indexOf(upNext[0]);
+    const rowIndex = order.indexOf(targetUniqueId);
 
     if (!state.getCurrentSong()?._uniqueId) return false;
 
     const currentIndex =
         state.getCurrentSong() !== undefined
-            ? state.queue.default.indexOf(state.getCurrentSong()!._uniqueId)
+            ? order.indexOf(state.getCurrentSong()!._uniqueId)
             : -1;
 
     return rowIndex >= currentIndex && rowIndex < upNextStart;
@@ -817,9 +861,27 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                             ...state.queue.default.slice(insertIndex),
                         ];
 
+                        // Read before the queue order changes: the play order points into it
+                        const listedOrder = isPlayOrderListed(state)
+                            ? getListedOrder(state)
+                            : undefined;
+
                         state.queue.default = newQueue;
 
-                        if (state.player.shuffle === PlayerShuffle.TRACK) {
+                        if (listedOrder) {
+                            // Dropped into the listed play order: they play where they were dropped
+                            const listedIndex = listedOrder.indexOf(uniqueId);
+                            const at = Math.max(0, edge === 'top' ? listedIndex : listedIndex + 1);
+                            setListedOrder(
+                                state,
+                                [
+                                    ...listedOrder.slice(0, at),
+                                    ...newUniqueIds,
+                                    ...listedOrder.slice(at),
+                                ],
+                                currentSongUniqueId,
+                            );
+                        } else if (state.player.shuffle === PlayerShuffle.TRACK) {
                             const currentTrack = state.getCurrentSong() as QueueSong | undefined;
                             const currentTrackUniqueId = currentTrack?._uniqueId;
 
@@ -1588,8 +1650,10 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                     set((state) => {
                         const currentId = get().getCurrentSong()?._uniqueId;
 
+                        const order = getListedOrder(state);
+
                         // Find the index of the drop target
-                        const index = state.queue.default.findIndex((id) => id === uniqueId);
+                        const index = order.findIndex((id) => id === uniqueId);
 
                         // Get the new index based on the edge
                         const insertIndex = Math.max(0, edge === 'top' ? index : index + 1);
@@ -1603,18 +1667,17 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                             }
                         });
 
-                        const idsBefore = state.queue.default
+                        const idsBefore = order
                             .slice(0, insertIndex)
                             .filter((id) => !itemUniqueIds.includes(id));
 
-                        const idsAfter = state.queue.default
+                        const idsAfter = order
                             .slice(insertIndex)
                             .filter((id) => !itemUniqueIds.includes(id));
 
                         const newQueue = [...idsBefore, ...itemUniqueIds, ...idsAfter];
 
-                        recalculatePlayerIndex(state, newQueue);
-                        state.queue.default = newQueue;
+                        setListedOrder(state, newQueue, currentId);
                         regroupUpNext(state, currentId, itemUniqueIds);
 
                         if (pinAboveUpNext) {
@@ -1633,16 +1696,15 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                             state.queue.songs[item._uniqueId] = item;
                         });
 
-                        const filtered = state.queue.default.filter(
+                        const filtered = getListedOrder(state).filter(
                             (id) => !uniqueIds.includes(id),
                         );
 
                         const newQueue = [...filtered, ...uniqueIds];
+                        const currentId = get().getCurrentSong()?._uniqueId;
 
-                        recalculatePlayerIndex(state, newQueue);
-
-                        state.queue.default = newQueue;
-                        regroupUpNext(state, get().getCurrentSong()?._uniqueId, uniqueIds);
+                        setListedOrder(state, newQueue, currentId);
+                        regroupUpNext(state, currentId, uniqueIds);
                     });
                 },
                 moveSelectedToNext: (items: QueueSong[]) => {
@@ -1656,7 +1718,7 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
 
                         const currentIndex = state.player.index;
                         let beforeCurrent = 0;
-                        const filtered = state.queue.default.filter((id, idx) => {
+                        const filtered = getListedOrder(state).filter((id, idx) => {
                             const shouldMove = uniqueIds.includes(id);
                             if (shouldMove && idx < currentIndex) {
                                 beforeCurrent++;
@@ -1681,9 +1743,9 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                             ...filtered.slice(insertIndex),
                         ];
 
-                        recalculatePlayerIndex(state, newQueue);
-                        state.queue.default = newQueue;
-                        regroupUpNext(state, get().getCurrentSong()?._uniqueId, uniqueIds);
+                        const currentId = get().getCurrentSong()?._uniqueId;
+                        setListedOrder(state, newQueue, currentId);
+                        regroupUpNext(state, currentId, uniqueIds);
                     });
                 },
                 moveSelectedToTop: (items: QueueSong[]) => {
@@ -1695,16 +1757,15 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                             state.queue.songs[item._uniqueId] = item;
                         });
 
-                        const filtered = state.queue.default.filter(
+                        const filtered = getListedOrder(state).filter(
                             (id) => !uniqueIds.includes(id),
                         );
 
                         const newQueue = [...uniqueIds, ...filtered];
+                        const currentId = get().getCurrentSong()?._uniqueId;
 
-                        recalculatePlayerIndex(state, newQueue);
-
-                        state.queue.default = newQueue;
-                        regroupUpNext(state, get().getCurrentSong()?._uniqueId, uniqueIds);
+                        setListedOrder(state, newQueue, currentId);
+                        regroupUpNext(state, currentId, uniqueIds);
                     });
                 },
                 setQueue: (items, index, position) => {
@@ -1821,6 +1882,24 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                 },
                 shuffleAll: () => {
                     set((state) => {
+                        // Shuffle what the queue lists, around the current song
+                        if (isPlayOrderListed(state)) {
+                            const currentId = get().getCurrentSong()?._uniqueId;
+                            const order = getListedOrder(state);
+                            const at = currentId === undefined ? -1 : order.indexOf(currentId);
+                            const ids =
+                                at === -1
+                                    ? shuffleInPlace([...order])
+                                    : [
+                                          ...shuffleInPlace(order.slice(0, at)),
+                                          order[at],
+                                          ...shuffleInPlace(order.slice(at + 1)),
+                                      ];
+                            setListedOrder(state, ids, currentId);
+                            syncUpNext(state);
+                            return;
+                        }
+
                         const queue = state.getQueue();
                         const currentIndex = state.player.index;
                         const currentSong = queue.items[currentIndex];
@@ -1861,10 +1940,11 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                 shuffleSelected: (items: QueueSong[]) => {
                     set((state) => {
                         const itemUniqueIds = items.map((item) => item._uniqueId);
+                        const order = getListedOrder(state);
 
-                        // Find positions of selected items in the default queue
+                        // Find positions of selected items in the listed queue
                         const selectedPositions = itemUniqueIds
-                            .map((id) => state.queue.default.findIndex((i) => i === id))
+                            .map((id) => order.findIndex((i) => i === id))
                             .filter((idx) => idx !== -1)
                             .sort((a, b) => a - b); // Sort to maintain order
 
@@ -1873,23 +1953,25 @@ export const usePlayerStoreBase = createWithEqualityFn<PlayerState>()(
                         }
 
                         // Get the selected items in their current order
-                        const selectedItems = selectedPositions.map(
-                            (pos) => state.queue.default[pos],
-                        );
+                        const selectedItems = selectedPositions.map((pos) => order[pos]);
 
                         // Shuffle the selected items
                         const shuffledItems = shuffleInPlace([...selectedItems]);
 
-                        // Rebuild the default queue with shuffled selected items
-                        const newDefaultQueue = [...state.queue.default];
+                        // Rebuild the listed queue with shuffled selected items
+                        const newOrder = [...order];
                         selectedPositions.forEach((pos, i) => {
-                            newDefaultQueue[pos] = shuffledItems[i];
+                            newOrder[pos] = shuffledItems[i];
                         });
 
-                        state.queue.default = newDefaultQueue;
+                        if (isPlayOrderListed(state)) {
+                            setListedOrder(state, newOrder, get().getCurrentSong()?._uniqueId);
+                        } else {
+                            state.queue.default = newOrder;
 
-                        // Regenerate shuffled indexes if shuffle is enabled
-                        regenerateShuffledIndexesIfNeeded(state);
+                            // Regenerate shuffled indexes if shuffle is enabled
+                            regenerateShuffledIndexesIfNeeded(state);
+                        }
                         syncUpNext(state);
                     });
                 },

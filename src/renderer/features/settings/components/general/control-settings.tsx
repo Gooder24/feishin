@@ -202,6 +202,27 @@ export const ControlSettings = memo(() => {
         {
             control: (
                 <Switch
+                    aria-label="Show shuffled order in queue"
+                    defaultChecked={settings.queueShowsPlayOrder}
+                    onChange={(e) =>
+                        setSettings({
+                            general: {
+                                ...settings,
+                                queueShowsPlayOrder: e.currentTarget.checked,
+                            },
+                        })
+                    }
+                />
+            ),
+            description: t('setting.queueShowsPlayOrder', {
+                context: 'description',
+            }),
+            isHidden: false,
+            title: t('setting.queueShowsPlayOrder'),
+        },
+        {
+            control: (
+                <Switch
                     aria-label="Follow current song"
                     defaultChecked={settings.followCurrentSong}
                     onChange={(e) =>
