@@ -218,10 +218,39 @@ export const PlayQueue = forwardRef<ItemListHandle, QueueProps>(
             player.clearSelected(selectedItems);
         }, [focused, player]);
 
+        // Moves the selected songs one row up or down, past the song next to them
+        const handleMoveSelected = useCallback(
+            (by: -1 | 1) => {
+                const selectedItems = tableRef.current?.internalState.getSelected() as QueueSong[];
+                if (
+                    !selectedItems?.length ||
+                    !containerRef.current?.contains(document.activeElement)
+                ) {
+                    return;
+                }
+
+                const selectedIds = new Set(selectedItems.map((item) => item._uniqueId));
+                const rows = filteredData
+                    .map((item, index) => (selectedIds.has(item._uniqueId) ? index : -1))
+                    .filter((index) => index !== -1);
+                const neighbor = filteredData[by < 0 ? rows[0] - 1 : rows[rows.length - 1] + 1];
+                if (!neighbor) return;
+
+                player.moveSelectedTo(
+                    rows.map((index) => filteredData[index]),
+                    by < 0 ? 'top' : 'bottom',
+                    neighbor._uniqueId,
+                );
+            },
+            [filteredData, player],
+        );
+
         // Mac keyboards send Backspace for the key labelled delete, so accept both
         useHotkeys([
             ['backspace', handleRemoveSelected],
             ['delete', handleRemoveSelected],
+            ['alt+arrowup', () => handleMoveSelected(-1)],
+            ['alt+arrowdown', () => handleMoveSelected(1)],
         ]);
 
         return (

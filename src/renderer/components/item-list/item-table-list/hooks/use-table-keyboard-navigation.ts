@@ -51,6 +51,8 @@ export const useTableKeyboardNavigation = ({
         (e: React.KeyboardEvent<HTMLDivElement>) => {
             if (!enableSelection) return;
             if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            // Alt with an arrow is left to the list, e.g. the play queue moves songs with it
+            if (e.altKey) return;
             e.preventDefault();
             e.stopPropagation();
 
